@@ -17,11 +17,13 @@ from tt_log import logger
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import numpy as np
 
 import Annotations as anno
 import Best        as best
 import Cluster     as cl
 import CigarString as cs
+
 
 VERSION = '20150529.01'
 
@@ -38,7 +40,7 @@ Q_THRESHOLD = 20.0              # passing grade for Q score
 MIN_REGION_SIZE = 50
 
 REGEX_NAME = re.compile ('(c\d+)')      # cluster ID in cluster name
-REGEX_LEN  = re.compile ('\|(\d+)$')    # cluster length in cluster name
+REGEX_LEN  = re.compile ('\/(\d+)$')     # cluster length in cluster name
 COMPLTAB   = string.maketrans ('ACGTacgt', 'TGCAtgca')     # for reverse-complementing reads
 
 def main ():
@@ -71,7 +73,7 @@ def main ():
     findRegions (tranList)                       # determine regions occupied by each transcript
 
     tranNames = orderTranscripts (tranList)      # set Y-axis coords for the transcripts
-
+    FPhistogram(tranNames)
     vertSize = FIG_HEIGHT_PER_TRANS * len(tranList) * opt.yscale + EXTRA_SPACE
     margin = EXTRA_SPACE / vertSize / 2.0
     logger.debug('nTrans: %d  vertSize: %5.2f  margin: %5.2f' % (len(tranList), vertSize, margin))
@@ -79,7 +81,7 @@ def main ():
     plt.subplots_adjust (top=1.0-margin, bottom=margin, left=0.13)
     plt.subplot (111)
 
-    plotExons (exonList, blocks, opt.flip)       # plot the exons
+    plotExons (exonList, blocks, opt.flip, opt)       # plot the exons
 
     plotStartStop (tranList, blocks)             # start/stop codons to plot
 
@@ -161,6 +163,15 @@ def getGeneFromMatches (opt, tranList, exonList):
     omits = [] if opt.omit is None else opt.omit.split(',')            # clusters which must not be included
     shows = [] if opt.show is None else opt.show.split(',')            # clusters which must be included
 
+    fullThreshold = -1
+    partialThreshold = -1
+    if opt.highsupport:                                                          # trim clusters with low support
+        if opt.full is not None:
+            fullThreshold = opt.full               # clusters should has higher full support than input
+        if opt.partial is not None:
+            partialThreshold =  opt.partial      # clusters should has higher partial support than input
+
+
     localList = list()                                                 # temporary list of clusters
     totClusters = 0
 
@@ -183,14 +194,17 @@ def getGeneFromMatches (opt, tranList, exonList):
                 sortKey = 'f%06dp%06d' % (full, partial)               # single key includes full and partial counts
 
                 matchLen = re.search(REGEX_LEN, cluster.name)          # filter by cluster length, if requested
-                if matchLen is None:
-                    raise RuntimeError ('no length in name: %s' % cluster.name)
-                    localList.append ( [cluster, sortKey] )            # shouldn't happen -- but let it slide
-                else:
-                    cLen = int(matchLen.group(1))
-                    if opt.minlen is None or cLen >= opt.minlen: 
-                        if opt.maxlen is None or cLen <= opt.maxlen: 
-                            localList.append ( [cluster, sortKey] )
+
+
+                if full >= fullThreshold and partial >= partialThreshold:
+                    if matchLen is None:
+                        raise RuntimeError ('no length in name: %s' % cluster.name)
+                        localList.append ( [cluster, sortKey] )            # shouldn't happen -- but let it slide
+                    else:
+                        cLen = int(matchLen.group(1))
+                        if opt.minlen is None or cLen >= opt.minlen:
+                            if opt.maxlen is None or cLen <= opt.maxlen:
+                                localList.append ( [cluster, sortKey] )
 
     localList.sort(key=lambda x: x[1], reverse=True)                   # sort by full/partial counts
 
@@ -407,8 +421,11 @@ def orderTranscripts (tranList):
 
     return tranNames
 
-def plotExons (exonList, blocks, flip):
+def plotExons (exonList, blocks, flip, opt):
     '''Plot exons.'''
+    if opt.full or opt.partial is not None:
+        fullThreshold = -1 if opt.full is None else opt.full
+        partialThreshold = -1 if opt.partial is None else opt.partial
 
     for myExon in exonList:
 
@@ -423,10 +440,13 @@ def plotExons (exonList, blocks, flip):
                 color = 'Magenta' if myExon.tran.score == 5 else 'DodgerBlue'
             else:
                 color = 'purple' if myExon.tran.score == 5 else 'blue'
+        if opt.full or opt.partial is not None:
+            alphaValue = alpha(fullThreshold, partialThreshold, myExon.tran.name)
+        else:
+            alphaValue = None
+        plt.hlines (myExon.tran.tranIx+1, adjStart, adjStart+exonSize, linewidth=3, colors=color, zorder=1, alpha=alphaValue)
 
-        plt.hlines (myExon.tran.tranIx+1, adjStart, adjStart+exonSize, linewidth=3, colors=color, zorder=1)
-
-        # Softclipped bases: Rather than fiddle with start/stop positions, just overwrite blue with orange 
+        # Softclipped bases: Rather than fiddle with start/stop positions, just overwrite blue with orange
 
         forwardStrand = '-' if flip else '+'
         if myExon.strand == forwardStrand:       # cigar string always refers to forward sense, but plot transcript sense
@@ -524,7 +544,7 @@ def plotBoundaries (tranNames, blocks):
 
     numberedNames = list()                 # cluster name + line number
     for ix, name in enumerate(tranNames):
-        numberedNames.append('%s %3d' % (name, ix+1)) 
+        numberedNames.append('%s %3d' % (name, ix+1))
 
     plt.grid(axis='y')                     # turn on horizontal dotted lines
     plt.xlim (0, blocks[-1].boundary)
@@ -576,7 +596,7 @@ def addNotes (tranList, blocks, filename):
             xoff = int(fields.get('xoff', 0))
             yoff = int(fields.get('yoff', 0))
 
-            plt.annotate (fields['text'], 
+            plt.annotate (fields['text'],
                           (xcoord, tran.tranIx+1),
                            fontsize='xx-small',
                            verticalalignment='center',
@@ -585,7 +605,7 @@ def addNotes (tranList, blocks, filename):
                            bbox=dict(boxstyle='round', fc=fc))
         else:
 
-            plt.annotate (fields['text'], 
+            plt.annotate (fields['text'],
                           (xcoord, tran.tranIx+1),
                            fontsize='xx-small',
                            verticalalignment='center',
@@ -619,7 +639,7 @@ def parseNoteFile (filename):
         matches = re.finditer (regexFields, line)
         for match in matches:
             tag = match.group(1)
-            val = match.group(2) if match.group(2) is not None else match.group(3) 
+            val = match.group(2) if match.group(2) is not None else match.group(3)
             if tag not in allTags:
                 raise RuntimeError ('tag \'%s\' unrecognized in %s' % (tag, line.strip()))
             ret[tag] = val
@@ -701,6 +721,70 @@ def writeFasta (opt, cluster):
 
     handle.close()
 
+def FP(tranname):
+    if '/' in tranname:
+        FullPar = tranname.split('/')[1][1:]
+        FPList = FullPar.split('p')
+        fullScore = int(FPList[0])
+        partialScore = int(FPList[1])
+        return fullScore, partialScore
+    else:
+        return
+
+def alpha(full, partial, tranname):
+    alphaValue = None
+    if FP(tranname) != None:
+        fullScore, partialScore = FP(tranname)
+        if (fullScore < full) or (partialScore < partial):
+            alphaValue = 0.2
+    return alphaValue
+
+def FPhistogram(tranNames):
+    full = list()
+    partial = list()
+    for name in tranNames:
+        if FP(name) != None:
+            fullScore, partialScore = FP(name)
+            full.append(fullScore)
+            partial.append(partialScore)
+    tfull = [(x, full.count(x)) for x in set(full)]
+    tpartial = [(x, partial.count(x)) for x in set(partial)]
+    tfull.sort()
+    tpartial.sort()
+    xfull = [x[0] for x in tfull]
+    yfull = [x[1] for x in tfull]
+    xpartial = [x[0] for x in tpartial]
+    ypartial = [x[1] for x in tpartial]
+    fig, ax = plt.subplots()
+    maxValue = max(max(partial), max(full))
+    for i in range(1,maxValue):
+        if i not in xfull:
+            xfull.insert(i-1, 0)
+            yfull.insert(i-1, 0)
+        if i not in xpartial:
+            xpartial.insert(i-1, 0)
+            ypartial.insert(i-1, 0)
+    xpartial = np.array(xpartial)
+    indexes = np.arange(0, maxValue+5, 5)
+    bar_width = 0.35
+    opacity = 0.4
+    bar1 = plt.bar(xfull, yfull, bar_width,
+                     color='b',
+                     alpha=opacity,
+                     label='full')
+    bar2 = plt.bar(xpartial+bar_width, ypartial, bar_width,
+                     color='r',
+                     alpha=opacity,
+                     label='partial')
+    plt.xlabel('FP support')
+    plt.ylabel('Quantity')
+    plt.xticks(indexes + bar_width, indexes)
+    plt.tick_params(axis='x', labelsize=8)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig ('FPhistogram.png')
+    plt.close()
+
 def getParms ():                       # use default input sys.argv[1:]
 
     # Note that --matches can be specified more than once, and opt.matches is a list.
@@ -725,7 +809,9 @@ def getParms ():                       # use default input sys.argv[1:]
     parser.add_option ('--fasta',   help='output directory for fasta files for chosen clusters (def: no output)')
     parser.add_option ('--title',   help='title for top of figure')
     parser.add_option ('--notes',   help='file of notations to add to plot (experts only!)')
-
+    parser.add_option ('--full',    help='full support threshold', type='int')
+    parser.add_option ('--partial', help='partial support threshold', type='int')
+    parser.add_option ('--highsupport',   help='only clusters have higher full and partial support than threshold will be plotted', action='store_true')
     parser.set_defaults (format='standard',
                          output=DEF_OUTPUT,
                          yscale=DEF_YSCALE,
@@ -740,14 +826,14 @@ class Transcript (object):
     '''Just a struct actually, containing data about a transcript.'''
 
     def __init__ (self, name, score=None, annot=False):
-        
+
         self.name    = name
         self.score   = score
         self.annot   = annot            # transcript comes from annotations?
         self.tranIx  = None             # y-axis coordinate of transcript
         self.exons   = list()           # Exon objects for this transcript
         self.blocks  = set()            # blocks where this transcript has exon(s)
-        self.regions = set()            # regions where this transcript has exon(s) 
+        self.regions = set()            # regions where this transcript has exon(s)
 
         # What's the difference between a block and a region? Every
         # exon boundary defines a new region. A new block occurs only
