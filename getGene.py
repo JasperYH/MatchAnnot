@@ -430,21 +430,25 @@ def groupTran(tranList, exonList, cluster_num):
             distanceTable.loc[tran1,tran2] = distance
 
     # Group transcripts, n_clusters set how mant groups should be assigned
-    group = KMeans(n_clusters=cluster_num).fit_predict(distanceTable)
-    df['group'] = group
-    df['color'] = df.apply(assignColor, axis=1)
+    for i in range(cluster_num):
+        group = KMeans(n_clusters=i+1).fit_predict(distanceTable)
+        global groupName
+        groupName = 'group%s' %str(i+1)
+        colorName = 'color%s' %str(i+1)
+        df[groupName] = group
+        df[colorName] = df.apply(assignColor, axis=1)
     return df
 
 def assignColor(row):
-    if row['group'] == 0:
+    if row[groupName] == 0:
         return 'blue'
-    elif row['group'] == 1:
+    elif row[groupName] == 1:
         return 'green'
-    elif row['group'] == 2:
+    elif row[groupName] == 2:
         return 'red'
-    elif row['group'] == 3:
+    elif row[groupName] == 3:
         return 'orange'
-    elif row['group'] == 4:
+    elif row[groupName] == 4:
         return 'yellow'
 
 def FP(tranname):
