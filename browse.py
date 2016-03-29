@@ -1,6 +1,6 @@
-path = "/home/jasper/Projects/MatchAnnot-master"
-import sys
-sys.path.append(path)
+import os, sys
+sys.path.append(os.getcwd())
+
 import getGene
 from getGene import *
 from bokeh.plotting import Figure
@@ -169,8 +169,11 @@ def plotBoundary(blocks):
     for bound in blocks:
         boundaryX.append([bound.boundary, bound.boundary])
     boundaryY = [[0, length+1] for x in range(len(boundaryX))]
-    boundaryDF['x'] = boundaryX
-    boundaryDF['y'] = boundaryY
+    global boundaryDF
+    newBoundaryDF = pd.DataFrame()
+    newBoundaryDF['x'] = boundaryX
+    newBoundaryDF['y'] = boundaryY
+    boundaryDF = newBoundaryDF
     return
 
 def greaterFP(row):
