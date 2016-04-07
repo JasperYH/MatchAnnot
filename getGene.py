@@ -33,9 +33,7 @@ REGEX_NAME = re.compile ('(c\d+)')      # cluster ID in cluster name
 REGEX_LEN  = re.compile ('\/(\d+)$')     # cluster length in cluster name
 COMPLTAB   = string.maketrans ('ACGTacgt', 'TGCAtgca')     # for reverse-complementing reads
 
-def getGeneFromAnnotation (opt, tranList, exonList):
-    '''Add to lists of transcripts and exons: annotations for gene of interest.'''
-
+def getAnnotations (opt):
     if opt.gtf == None:
         return tranList, exonList
 
@@ -47,6 +45,27 @@ def getGeneFromAnnotation (opt, tranList, exonList):
         annotList   = anno.AnnotationList (opt.gtf, altFormat=True)
     else:     # standard format
         annotList   = anno.AnnotationList (opt.gtf)
+
+    return annotList
+
+def getGeneFromAnnotation (opt, tranList, exonList):
+    '''Add to lists of transcripts and exons: annotations for gene of interest.'''
+
+    if opt.gtf == None:
+        return tranList, exonList
+
+    omits = [] if opt.omit is None else opt.omit.split(',')            # transcripts which must not be included
+
+    if opt.annotations:
+        annotList = opt.annotations
+    else:
+        if opt.format == 'pickle':
+            annotList   = anno.AnnotationList.fromPickle (opt.gtf)
+        elif opt.format == 'alt':
+            annotList   = anno.AnnotationList (opt.gtf, altFormat=True)
+        else:     # standard format
+            annotList   = anno.AnnotationList (opt.gtf)
+
 
     allGenes = annotList.getGeneDict()
     if opt.gene not in allGenes:
@@ -61,7 +80,7 @@ def getGeneFromAnnotation (opt, tranList, exonList):
 
         if tran.name not in omits:                          # if not in ignore list
 
-            myTran = Transcript(tran.name, annot=True)
+            myTran = Transcript(tran.name, start=tran.start, end=tran.end, annot=True)
 
             if hasattr(tran, 'startcodon'):
                 myTran.startcodon = tran.startcodon
@@ -159,7 +178,6 @@ def getGeneFromMatches (opt, tranList, exonList):
     totPartial = 0
 
     for ent in localList:
-
         cluster = ent[0]
         myTran = Transcript(cluster.name, score=cluster.bestScore)
 
@@ -167,16 +185,27 @@ def getGeneFromMatches (opt, tranList, exonList):
         totFull += full
         totPartial += partial
 
+        myTran.full = full
+        myTran.partial = partial
+
+        end = 0
+        start = float('inf')
+
         leading, trailing = cluster.cigar.softclips()
 
         for exonNum, exon in enumerate(cluster.cigar.exons()):         # exon is a cs.Exon object
 
             exonName = '%s/%d' % (myTran.name, exonNum)                # exons don't have names: make one up
 
+            if end < exon.end:
+                end = exon.end
+            if start > exon.start:
+                start = exon.start
+
             if cluster.cigar.MD is not None:                           # if MD string was supplied
-                myExon = Exon(myTran, exonName, exon.start, exon.end, cluster.strand, QScore=exon.QScore())
+                myExon = Exon(myTran, exonName, exon.start, exon.end, cluster.strand, QScore=exon.QScore(), full=full, partial=partial)
             else:
-                myExon = Exon(myTran, exonName, exon.start, exon.end, cluster.strand)
+                myExon = Exon(myTran, exonName, exon.start, exon.end, cluster.strand, full=full, partial=partial)
 
             if exonNum == 0:
                 myExon.leading = leading              # add leading softclips to first exon
@@ -185,6 +214,9 @@ def getGeneFromMatches (opt, tranList, exonList):
             myTran.exons.append(myExon)
 
         myExon.trailing = trailing                    # add trailing softclips to last exon
+
+        myTran.start = start
+        myTran.end = end
 
         tranList.append (myTran)
 
@@ -195,7 +227,6 @@ def getGeneFromMatches (opt, tranList, exonList):
     logger.debug('kept clusters include %d full + %d partial reads' % (totFull, totPartial))
 
     return tranList, exonList
-
 
 def assignBlocks (opt, exonList):
     '''
@@ -349,41 +380,23 @@ def orderTranscripts (tranList):
     return tranNames
 
 def groupTran(tranList, exonList, cluster_num):
-    df = pd.DataFrame()
-    Name = list()
-    # Get the names of all distinct transcript
-    for tran in tranList:
-        if '-' not in tran.name:
-            Name.append(tran.name)
-    # Append distinct name to the dataframe
-    df['name'] = Name
-    length = len(df)
-
     # minVal is the minimum starting point of all the transcripts, maxVal stands for maximum
-    AllExon = list()
-    minVal = float("inf")
     maxVal = 0
+    minVal = float('inf')
+    matchTran = list()
+    for tran in tranList:
+        if tran.annot == False:
+            if maxVal < tran.end:
+                maxVal = tran.end
+            if minVal > tran.start:
+                minVal = tran.start
+            matchTran.append(tran)
 
-    # Need improvement!!! # for each distint transcript, append [start, end] of all its exons
-    for name in Name:
-        tranExons = list()
-        for exon in exonList:
-            if name in exon.name:
-                start = exon.start
-                end = exon.end
-                if start > maxVal or end > maxVal:
-                    maxVal = max(start, end)
-                if start < minVal or end < minVal:
-                    minVal = min(start, end)
-                tranExons.append([start, end])
-        AllExon.append(tranExons)
-
-    # Set the minimum starting point to 0
-    for i in AllExon:
-        for j in i:
-            j[0] = j[0] - minVal
-            j[1] = j[1] - minVal
-    df['exon'] = AllExon
+    df = pd.DataFrame(data=matchTran, columns=['tran'])
+    df['min'] = minVal
+    df['max'] = maxVal
+    df['exons'] = df.apply(getExon, axis=1)
+    df['name'] = df.apply(getName, axis=1)
 
     # Build a matrix contains only true and false
     #
@@ -396,13 +409,7 @@ def groupTran(tranList, exonList, cluster_num):
     #     booleanTran has the same length with superimpose, which is a list of False. Change the overlap region
     #   between the booleanTran and each transcript to True.
 
-    booleanMatrix = list()
-    for tranExon in df.exon:
-        booleanTran = [False for x in range(maxVal-minVal)]
-        for exon in tranExon:
-            booleanTran[exon[0]:exon[1]+1] = [True for x in range(exon[1]+1-exon[0])]
-        booleanMatrix.append(booleanTran)
-    df['boolean'] = booleanMatrix
+    df['boolean'] = df.apply(toBoolean, axis=1)
 
     # Create a distance table that can be used in K-Means.
     #
@@ -414,30 +421,53 @@ def groupTran(tranList, exonList, cluster_num):
     #    The number can be interpreted as the similarity between each two transcript. 0 means they are exactly same
     #  while 1 means they have no overlap region.
 
-    distanceTable = pd.DataFrame([[-1 for x in range(length)] for x in range (length)])
-    index = list(df['name'])
+    length = len(df)
+    index = df['name']
+    matrix = [[calcDis(df,i,j) for i in range(length)] for j in range(length)]
+    distanceTable = pd.DataFrame()
+    distanceTable = pd.DataFrame(matrix)
     distanceTable.columns = index
     distanceTable.index = index
-    for tran1 in distanceTable.index:
-        for tran2 in distanceTable.columns:
-            boolean1 = list(df[df['name'] == tran1].boolean)[0]
-            boolean2 = list(df[df['name'] == tran2].boolean)[0]
-            length1 = float(sum(boolean1))
-            length2 = float(sum(boolean2))
-            overlapLength = sum([a and b for a, b in zip(boolean1, boolean2)])
-            # How the number in the distance table is calculated:
-            distance = (length1 + length2 - 2 * overlapLength) / (length1 + length2-overlapLength)
-            distanceTable.loc[tran1,tran2] = distance
 
     # Group transcripts, n_clusters set how mant groups should be assigned
+    colorDF = pd.DataFrame()
+    colorDF['name'] = df['name']
+    if len(colorDF) < cluster_num:
+        cluster_num = len(colorDF)
     for i in range(cluster_num):
         group = KMeans(n_clusters=i+1).fit_predict(distanceTable)
         global groupName
         groupName = 'group%s' %str(i+1)
         colorName = 'color%s' %str(i+1)
-        df[groupName] = group
-        df[colorName] = df.apply(assignColor, axis=1)
-    return df
+        colorDF[groupName] = group
+        colorDF[colorName] = colorDF.apply(assignColor, axis=1)
+    return colorDF
+
+def getExon(row):
+    startEnd = list()
+    exons = row.tran.exons
+    for exon in exons:
+        startEnd.append((exon.start-row['min'], exon.end-row['min']))
+    return startEnd
+
+def getName(row):
+    return row.tran.name
+
+def toBoolean(row):
+    booleanTran = [False for x in range(row['max']-row['min'])]
+    exons = row['exons']
+    for exon in exons:
+        booleanTran[exon[0]:exon[1]+1] = [True for x in range(exon[1]+1-exon[0])]
+    return booleanTran
+
+def calcDis(df, i, j):
+    tran1 = df.ix[i]
+    tran2 = df.ix[j]
+    sum1 = float(sum(tran1['boolean']))
+    sum2 = float(sum(tran2['boolean']))
+    overlapLength = sum([a and b for a, b in zip(tran1['boolean'], tran2['boolean'])])
+    distance = (sum1 + sum2 - 2 * overlapLength) / (sum1 + sum2-overlapLength)
+    return distance
 
 def assignColor(row):
     if row[groupName] == 0:
@@ -451,25 +481,19 @@ def assignColor(row):
     elif row[groupName] == 4:
         return 'yellow'
 
-def FP(tranname):
-    if '-' not in tranname:
-        FullPar = tranname.split('/')[1][1:]
-        FPList = FullPar.split('p')
-        fullScore = int(FPList[0])
-        partialScore = int(FPList[1])
-        return fullScore, partialScore
-    else:
-        return 0, 0
-
 class Transcript (object):
     '''Just a struct actually, containing data about a transcript.'''
 
-    def __init__ (self, name, score=None, annot=False):
+    def __init__ (self, name, start=None, end=None, score=None, full=None, partial=None, annot=False):
 
         self.name    = name
         self.score   = score
         self.annot   = annot            # transcript comes from annotations?
         self.tranIx  = None             # y-axis coordinate of transcript
+        self.full    = full
+        self.partial = partial
+        self.start = start
+        self.end = end
         self.exons   = list()           # Exon objects for this transcript
         self.blocks  = set()            # blocks where this transcript has exon(s)
         self.regions = set()            # regions where this transcript has exon(s)
@@ -492,7 +516,7 @@ class Transcript (object):
 class Exon (object):
     '''Struct containing data about an exon.'''
 
-    def __init__ (self, tran, name, start, end, strand, QScore=None):
+    def __init__ (self, tran, name, start, end, strand, QScore=None, full=None, partial=None):
 
         self.tran     = tran            # Transcript object containing this exon
         self.name     = name
@@ -500,6 +524,8 @@ class Exon (object):
         self.end      = end
         self.strand   = strand
         self.QScore   = QScore
+        self.full     = full
+        self.partial  = partial
         self.block    = None            # block number where this exon resides
         self.adjStart = None            # start of exon in phony x-axis coordinates
         self.leading  = 0               # number of leading softclipped bases

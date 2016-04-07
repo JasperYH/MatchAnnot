@@ -22,8 +22,9 @@ def selectGene(opt):
     return tranList, exonList
 
 def updateGene(attrname, old, new):
-    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip())
+    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip(), annotations=Annotations)
     opt.gene = Gene.value.strip()
+    global tranList
     tranList, exonList = selectGene(opt)
     forwardStrand = '-' if opt.flip else '+'
     if exonList[0].strand == forwardStrand:
@@ -36,7 +37,7 @@ def updateGene(attrname, old, new):
     findRegions (tranList)                       # determine regions occupied by each transcript
     tranNames = orderTranscripts (tranList)
 
-    global length, df, groupDF, df, boundaryDF, height
+    global length, df, colorDF,boundaryDF, height
     length = len(tranNames)
     height = 900
     if round(900/float(2*length)) < 6:
@@ -45,8 +46,12 @@ def updateGene(attrname, old, new):
     p.title = "Transcript of %s" % opt.gene
     p.y_range.factors = tranNames[::-1]
 
-    groupDF = groupTran(tranList, exonList, 5)
-    plotExon(exonList, groupDF)
+    if Group.value == "on":
+        colorDF = groupTran(tranList, exonList, 5)
+    else:
+        colorDF = None
+
+    plotExon(exonList, colorDF)
 
     source.data = dict(
         xs=df['xs'],
@@ -85,10 +90,9 @@ def updateFP(attrname, old, new):
 
 def updateGroup(attrname, old, new):
     colors = list()
-    colorName = 'color%s' %str(Cluster.value)
-    global groupDF, df
+    global colorDF, df
     for index, row in df.iterrows():
-        color = getColor(row['name'], groupDF)
+        color = getColor(row['tran'], colorDF)
         colors.append(color)
     df['colors'] = colors
     source.data = dict(
@@ -104,7 +108,7 @@ def updateGroup(attrname, old, new):
         line_width=df['line_width'],
     )
 
-def plotExon(exonList, groupDF):
+def plotExon(exonList, colorDF):
     name=list()
     xs = list()
     ys = list()
@@ -116,13 +120,21 @@ def plotExon(exonList, groupDF):
     QScore=list()
     start=list()
     end=list()
+    tran=list()
     for myExon in exonList:
         exonSize = myExon.end - myExon.start + 1
         adjStart = myExon.adjStart
-        fullScore, partialScore = FP(myExon.name)
+        fullScore = myExon.full
+        partialScore = myExon.partial
         full.append(fullScore)
         partial.append(partialScore)
-        color = getColor(myExon.name, groupDF)
+        if colorDF is not None:
+            color = getColor(myExon.tran.name, colorDF)
+        else:
+            if myExon.tran.annot:
+                color = 'purple'
+            else:
+                color = 'blue'
 
         name.append(myExon.name)
         xs.append([adjStart, adjStart+exonSize])
@@ -133,6 +145,7 @@ def plotExon(exonList, groupDF):
         QScore.append(myExon.QScore)
         start.append(myExon.start)
         end.append(myExon.end)
+        tran.append(myExon.tran.name)
 
     global df
     exonNum = len(exonList)
@@ -149,19 +162,18 @@ def plotExon(exonList, groupDF):
     newDF['QScore'] = QScore
     newDF['start'] = start
     newDF['end'] = end
+    newDF['tran'] = tran
     newDF['line_width'] = round(height/float(2*length))
     df = newDF
     return
 
-def getColor(exname, XibaDF):
-    clusters = Cluster.value
-    color = 'purple'
-    colorName = 'color%s' % str(clusters)
-    for i, r in XibaDF.iterrows():
-        name = r['name']
-        if name in exname:
-            color = r[colorName]
-            break
+def getColor(exonName, colorDF):
+    if exonName not in list(colorDF.name):
+        color = 'purple'
+    else:
+        row = colorDF.loc[colorDF['name'] == exonName]
+        colorName = 'color%s' %str(Cluster.value)
+        color = row[colorName]
     return color
 
 def plotBoundary(blocks):
@@ -183,11 +195,36 @@ def greaterFP(row):
     else:
         return 1.0
 
+def saveDF(attrname, old, new):
+    outDF = pd.DataFrame()
+    fileName = Save.value.strip()
+    name = list()
+    full = list()
+    partial = list()
+    start = list()
+    end = list()
+    score = list()
+    for tran in tranList:
+        if tran.annot == False:
+            name.append(tran.name)
+            full.append(tran.full)
+            partial.append(tran.partial)
+            start.append(tran.start)
+            end.append(tran.end)
+            score.append(tran.score)
+    outDF['name'] = name
+    outDF['full'] = full
+    outDF['partial'] = partial
+    outDF['start'] = start
+    outDF['end'] = end
+    outDF['score'] = score
+    outDF.to_csv(fileName)
+
 class getParams(object):
     def __init__(self, gtf, matches, gene, formatt="standard", omit=None,
                  show=None, howmany=None, nodups=None, minlen=None, maxlen=None, output="exon.png",
-                 flip=None, yscale=1.0, details=None, fasta=None, title=None, notes=None, full= None,
-                 partial=None, highsupport=None):
+                 flip=None, yscale=1.0, details=None, fasta=None, title=None, notes=None, full=None,
+                 partial=None, highsupport=None, annotations=None):
         self.gtf = gtf
         self.matches = matches
         self.gene = gene
@@ -208,8 +245,10 @@ class getParams(object):
         self.highsupport = highsupport
         self.full = full
         self.partial = partial
+        self.annotations = annotations
 
-
+tranList = list()
+Annotations = getAnnotations(getParams("gencode.vM8.annotation.gtf", None, None))
 GTF = TextInput(title="Enter the name of GTF file", value="gencode.vM8.annotation.gtf")
 Matches = TextInput(title="Enter the name of pickle file from MatchAnnot", value="matches.pickle")
 Gene = TextInput(title="Select gene to visualize")
@@ -217,13 +256,16 @@ Alpha = Slider(title="Alpha value of exons", value=1.0, start=0, end=1.0, step=0
 Full = Slider(title="Full support threshold", value=0, start=0, end=30, step=1.0)
 Partial = Slider(title="Partial support threshold", value=0, start=0, end=50, step=1.0)
 Cluster = Slider(title="The number of clusters", value=3, start=1, end=5, step=1.0)
+Group = Select(title="Group isoform or not", value="on", options=["on", "off"])
+Save = TextInput(title="Enter the file name to save data (e.g. gene.csv)")
 
 boundarySource = ColumnDataSource(data=dict(xs=[], ys=[]))
 source = ColumnDataSource(data=dict(xs=[], ys=[], color=[], line_alpha=[], x=[], y=[], QScore=[], start=[], end=[], line_width=[]))
 
 df = pd.DataFrame()
 boundaryDF = pd.DataFrame()
-groupDF = pd.DataFrame()
+colorDF = pd.DataFrame()
+outDF = pd.DataFrame()
 
 hover = HoverTool(tooltips=[
     ("QScore", "@QScore"),
@@ -238,11 +280,12 @@ p.circle(x="x", y="y", source=source, size=5, color="color", line_color=None)
 p.multi_line(xs="xs", ys="ys", source=boundarySource, color="black", line_width=2, line_alpha=0.4, line_dash="dotted")
 p.multi_line(xs="xs", ys="ys", source=source, color="color", line_width="line_width", line_alpha='line_alpha')
 
-controls = [GTF, Matches, Gene, Alpha, Full, Partial, Cluster]
+controls = [GTF, Matches, Gene, Alpha, Full, Partial, Cluster, Group, Save]
 Gene.on_change('value', updateGene)
 Full.on_change('value', updateFP)
 Partial.on_change('value', updateFP)
 Cluster.on_change('value', updateGroup)
+Save.on_change('value', saveDF)
 
 inputs = HBox(VBoxForm(*controls), width=300)
 curdoc().add_root(HBox(inputs, p, width=1300))
