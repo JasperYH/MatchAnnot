@@ -22,7 +22,7 @@ def selectGene(opt):
     return tranList, exonList
 
 def updateGene(attrname, old, new):
-    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip(), annotations=Annotations)
+    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip())
     opt.gene = Gene.value.strip()
     global tranList
     tranList, exonList = selectGene(opt)
@@ -42,7 +42,8 @@ def updateGene(attrname, old, new):
     height = 900
     if round(900/float(2*length)) < 6:
         height = 12*length
-        p.plot_height = height
+    p.plot_height = height
+    print p.plot_height
     p.title = "Transcript of %s" % opt.gene
     p.y_range.factors = tranNames[::-1]
 
@@ -51,7 +52,7 @@ def updateGene(attrname, old, new):
     else:
         colorDF = None
 
-    plotExon(exonList, colorDF)
+    getExonData(exonList, colorDF)
 
     source.data = dict(
         xs=df['xs'],
@@ -66,7 +67,7 @@ def updateGene(attrname, old, new):
         line_width=df['line_width'],
     )
 
-    plotBoundary(blocks)
+    getBoundaryData(blocks)
     boundarySource.data = dict(
         xs=boundaryDF['x'],
         ys=boundaryDF['y'],
@@ -108,26 +109,14 @@ def updateGroup(attrname, old, new):
         line_width=df['line_width'],
     )
 
-def plotExon(exonList, colorDF):
-    name=list()
-    xs = list()
-    ys = list()
-    colors = list()
-    full = list()
-    partial = list()
-    circlex=list()
-    circley=list()
-    QScore=list()
-    start=list()
-    end=list()
-    tran=list()
+def getExonData(exonList, colorDF):
+    global df
+    columns = ['name', 'xs', 'ys', 'colors', 'circlex', 'circley', 'QScore',
+                'start', 'end', 'tran', 'full', 'partial']
+    df = pd.DataFrame(columns=columns)
     for myExon in exonList:
         exonSize = myExon.end - myExon.start + 1
         adjStart = myExon.adjStart
-        fullScore = myExon.full
-        partialScore = myExon.partial
-        full.append(fullScore)
-        partial.append(partialScore)
         if colorDF is not None:
             color = getColor(myExon.tran.name, colorDF)
         else:
@@ -135,37 +124,17 @@ def plotExon(exonList, colorDF):
                 color = 'purple'
             else:
                 color = 'blue'
+        xs = [adjStart, adjStart+exonSize]
+        ys = [length-(myExon.tran.tranIx), length-(myExon.tran.tranIx)]
+        circlex = (adjStart + adjStart+exonSize)/2
+        circley = length-(myExon.tran.tranIx)
+        data = pd.Series([myExon.name, xs, ys, color, circlex, circley,
+                        myExon.QScore, myExon.start, myExon.end,
+                        myExon.tran.name, myExon.full, myExon.partial], index=[columns])
 
-        name.append(myExon.name)
-        xs.append([adjStart, adjStart+exonSize])
-        ys.append([length-(myExon.tran.tranIx), length-(myExon.tran.tranIx)])
-        colors.append(color)
-        circlex.append((adjStart + adjStart+exonSize)/2)
-        circley.append(length-(myExon.tran.tranIx))
-        QScore.append(myExon.QScore)
-        start.append(myExon.start)
-        end.append(myExon.end)
-        tran.append(myExon.tran.name)
-
-    global df
-    exonNum = len(exonList)
-    newDF = pd.DataFrame()
-    newDF['name'] = name
-    newDF['xs'] = xs
-    newDF['ys'] = ys
-    newDF['alpha'] = [1 for x in range(exonNum)]
-    newDF['colors'] = colors
-    newDF['full'] = full
-    newDF['partial'] = partial
-    newDF['circlex'] = circlex
-    newDF['circley'] = circley
-    newDF['QScore'] = QScore
-    newDF['start'] = start
-    newDF['end'] = end
-    newDF['tran'] = tran
-    newDF['line_width'] = round(height/float(2*length))
-    df = newDF
-    return
+        df = df.append(data,ignore_index=True)
+    df['line_width'] = round(height/float(2*length))
+    df['alpha'] = 1
 
 def getColor(exonName, colorDF):
     if exonName not in list(colorDF.name):
@@ -176,7 +145,7 @@ def getColor(exonName, colorDF):
         color = row[colorName]
     return color
 
-def plotBoundary(blocks):
+def getBoundaryData(blocks):
     boundaryX = list()
     for bound in blocks:
         boundaryX.append([bound.boundary, bound.boundary])
@@ -247,7 +216,6 @@ class getParams(object):
         self.partial = partial
         self.annotations = annotations
 
-tranList = list()
 Annotations = getAnnotations(getParams("gencode.vM8.annotation.gtf", None, None))
 GTF = TextInput(title="Enter the name of GTF file", value="gencode.vM8.annotation.gtf")
 Matches = TextInput(title="Enter the name of pickle file from MatchAnnot", value="matches.pickle")
@@ -260,7 +228,8 @@ Group = Select(title="Group isoform or not", value="on", options=["on", "off"])
 Save = TextInput(title="Enter the file name to save data (e.g. gene.csv)")
 
 boundarySource = ColumnDataSource(data=dict(xs=[], ys=[]))
-source = ColumnDataSource(data=dict(xs=[], ys=[], color=[], line_alpha=[], x=[], y=[], QScore=[], start=[], end=[], line_width=[]))
+source = ColumnDataSource(data=dict(xs=[], ys=[], color=[], line_alpha=[],
+                    x=[], y=[], QScore=[], start=[], end=[], line_width=[]))
 
 df = pd.DataFrame()
 boundaryDF = pd.DataFrame()
@@ -273,12 +242,14 @@ hover = HoverTool(tooltips=[
     ("end", "@end")
 ])
 tools = [PanTool(), WheelZoomTool(), BoxZoomTool(), ResetTool(), ResizeTool(), PreviewSaveTool(), hover]
-p = Figure(plot_height=900, plot_width=1200, title="", y_range=['tran1', 'tran2', 'tran3'], tools=tools)
+p = Figure(plot_height=900, plot_width=1200, title="", y_range=['tran'], tools=tools)
 p.xgrid.grid_line_color = None
 p.ygrid.grid_line_color = None
 p.circle(x="x", y="y", source=source, size=5, color="color", line_color=None)
-p.multi_line(xs="xs", ys="ys", source=boundarySource, color="black", line_width=2, line_alpha=0.4, line_dash="dotted")
-p.multi_line(xs="xs", ys="ys", source=source, color="color", line_width="line_width", line_alpha='line_alpha')
+p.multi_line(xs="xs", ys="ys", source=boundarySource, color="black",
+            line_width=2, line_alpha=0.4, line_dash="dotted")
+p.multi_line(xs="xs", ys="ys", source=source, color="color",
+            line_width="line_width", line_alpha='line_alpha')
 
 controls = [GTF, Matches, Gene, Alpha, Full, Partial, Cluster, Group, Save]
 Gene.on_change('value', updateGene)

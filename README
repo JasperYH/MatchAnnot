@@ -1,3 +1,6 @@
+MatchAnnot visualization displays isoform interactively using bokeh library. To
+use it, type:
+bokeh serve --show browse.py
 
 MatchAnnot is a python script which accepts a SAM file of IsoSeq
 transcripts aligned to a genomic reference and matches them to an
@@ -27,12 +30,12 @@ cigar:       The cigar string from the SAM file entry for the isoform.
 
 cl:          A list of the reads-of-insert which were clustered to create the
              isoform. This information is printed only if a cluster report file
-             is supplied via the --clusters parameter. Each line lists one or 
+             is supplied via the --clusters parameter. Each line lists one or
 	     more reads from a single SMRTcell, labelled as either full-length
              or non-FL. The mapping from SMRTcell number to full SMRTcell name
 	     is in the summary at the end of the output.
 
-polyA:       A list of the positions where polyadenylation motifs were found 
+polyA:       A list of the positions where polyadenylation motifs were found
              near the 3' end of the isoform.
 
 gene:        A gene in the annotation file whose position overlaps the
@@ -49,7 +52,7 @@ tr:          An annotated transcript of the gene under consideration. Line
              5: IsoSeq exons match annotation exons one-for-one. Sizes agree
                 except for leading and trailing edges.
 
-             4: Like 5, but leading and trailing edge sizes differ by a 
+             4: Like 5, but leading and trailing edge sizes differ by a
                 larger amount than the score-5 transcript found for this gene.
 
              3: One-for-one exon match, but sizes of internal exons disagree.
