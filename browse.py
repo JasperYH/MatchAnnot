@@ -22,7 +22,7 @@ def selectGene(opt):
     return tranList, exonList
 
 def updateGene(attrname, old, new):
-    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip())
+    opt = getParams(GTF.value.strip(), [Matches.value.strip()], Gene.value.strip(), annotations=Annotations)
     opt.gene = Gene.value.strip()
     global tranList
     tranList, exonList = selectGene(opt)
