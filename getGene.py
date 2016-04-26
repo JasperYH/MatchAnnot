@@ -7,6 +7,7 @@ import string
 from tt_log import logger
 
 import numpy as np
+import cPickle as pickle
 
 import Annotations as anno
 import Best        as best
@@ -15,28 +16,15 @@ import CigarString as cs
 import pandas as pd
 from sklearn.cluster import KMeans
 
-VERSION = '20150529.01'
+COLORS = ['#52B3D9', '#BE90D4', '#446CB3', '#86E2D5', '#F5D76E']
 
-DEF_OUTPUT = 'exons.png'        # default plot filename
-DEF_YSCALE = 1.0                # default  Y-axis scale factor
-
-FIG_WIDTH = 14
-FIG_HEIGHT_PER_TRANS = 0.2      # figure height depends on the number of rows
-MAX_LABELS = 20                 # how many labels fit across the X axis
-EXTRA_SPACE = 1.0               # added vertical space in figure for labels, etc
-
-FASTA_WRAP = 60                 # bases per fasta line
-Q_THRESHOLD = 20.0              # passing grade for Q score
 MIN_REGION_SIZE = 50
-
+FASTA_WRAP = 60                 # bases per fasta line
 REGEX_NAME = re.compile ('(c\d+)')      # cluster ID in cluster name
 REGEX_LEN  = re.compile ('\/(\d+)$')     # cluster length in cluster name
 COMPLTAB   = string.maketrans ('ACGTacgt', 'TGCAtgca')     # for reverse-complementing reads
 
 def getAnnotations (opt):
-    if opt.gtf == None:
-        return tranList, exonList
-
     omits = [] if opt.omit is None else opt.omit.split(',')            # transcripts which must not be included
 
     if opt.format == 'pickle':
@@ -44,7 +32,7 @@ def getAnnotations (opt):
     elif opt.format == 'alt':
         annotList   = anno.AnnotationList (opt.gtf, altFormat=True)
     else:     # standard format
-        annotList   = anno.AnnotationList (opt.gtf)
+        annotList = anno.AnnotationList (opt.gtf)
 
     return annotList
 
@@ -66,7 +54,6 @@ def getGeneFromAnnotation (opt, tranList, exonList):
         else:     # standard format
             annotList   = anno.AnnotationList (opt.gtf)
 
-
     allGenes = annotList.getGeneDict()
     if opt.gene not in allGenes:
         raise RuntimeError ('gene %s is not in the annotation file' % opt.gene)
@@ -80,7 +67,7 @@ def getGeneFromAnnotation (opt, tranList, exonList):
 
         if tran.name not in omits:                          # if not in ignore list
 
-            myTran = Transcript(tran.name, start=tran.start, end=tran.end, annot=True)
+            myTran = Transcript(tran.name, start=tran.start, end=tran.end, annot=True, ID=tran.ID)
 
             if hasattr(tran, 'startcodon'):
                 myTran.startcodon = tran.startcodon
@@ -108,15 +95,6 @@ def getGeneFromMatches (opt, tranList, exonList):
     omits = [] if opt.omit is None else opt.omit.split(',')            # clusters which must not be included
     shows = [] if opt.show is None else opt.show.split(',')            # clusters which must be included
 
-    fullThreshold = -1
-    partialThreshold = -1
-    if opt.highsupport:                                                          # trim clusters with low support
-        if opt.full is not None:
-            fullThreshold = opt.full               # clusters should has higher full support than input
-        if opt.partial is not None:
-            partialThreshold =  opt.partial      # clusters should has higher partial support than input
-
-
     localList = list()                                                 # temporary list of clusters
     totClusters = 0
 
@@ -125,7 +103,6 @@ def getGeneFromMatches (opt, tranList, exonList):
         clusterDict = cl.ClusterDict.fromPickle (matchFile)            # pickle file produced by matchAnnot.py
 
         for cluster in clusterDict.getClustersForGene(opt.gene):       # cluster is Cluster object
-
             totClusters += 1
 
             match = re.search (REGEX_NAME, cluster.name)
@@ -140,16 +117,14 @@ def getGeneFromMatches (opt, tranList, exonList):
 
                 matchLen = re.search(REGEX_LEN, cluster.name)          # filter by cluster length, if requested
 
-
-                if full >= fullThreshold and partial >= partialThreshold:
-                    if matchLen is None:
-                        raise RuntimeError ('no length in name: %s' % cluster.name)
-                        localList.append ( [cluster, sortKey] )            # shouldn't happen -- but let it slide
-                    else:
-                        cLen = int(matchLen.group(1))
-                        if opt.minlen is None or cLen >= opt.minlen:
-                            if opt.maxlen is None or cLen <= opt.maxlen:
-                                localList.append ( [cluster, sortKey] )
+                if matchLen is None:
+                    raise RuntimeError ('no length in name: %s' % cluster.name)
+                    localList.append ( [cluster, sortKey] )            # shouldn't happen -- but let it slide
+                else:
+                    cLen = int(matchLen.group(1))
+                    if opt.minlen is None or cLen >= opt.minlen:
+                        if opt.maxlen is None or cLen <= opt.maxlen:
+                            localList.append ( [cluster, sortKey] )
 
     localList.sort(key=lambda x: x[1], reverse=True)                   # sort by full/partial counts
 
@@ -180,6 +155,7 @@ def getGeneFromMatches (opt, tranList, exonList):
     for ent in localList:
         cluster = ent[0]
         myTran = Transcript(cluster.name, score=cluster.bestScore)
+        myTran.chr = cluster.chr
 
         full, partial = cluster.getFP()
         totFull += full
@@ -187,6 +163,7 @@ def getGeneFromMatches (opt, tranList, exonList):
 
         myTran.full = full
         myTran.partial = partial
+
 
         end = 0
         start = float('inf')
@@ -359,8 +336,10 @@ def orderTranscripts (tranList):
     tranIx = 0
 
     while True:                                     # loop until break below
-
-        tranNames.append(curTran.name)              # needed for yticks call
+        if curTran.annot is False:
+            tranNames.append(curTran.name)              # needed for yticks call
+        else:
+            tranNames.append(curTran.ID)
         curTran.tranIx = tranIx
 
         bestTran = best.Best(reverse=True)
@@ -378,6 +357,37 @@ def orderTranscripts (tranList):
         tranIx += 1
 
     return tranNames
+
+def writeFasta (opt, cluster):
+    '''Write a fasta file for a cluster.'''
+
+    # It's fairly common to want to see the sequence for interesting
+    # clusters in fasta format. It's convenient to build that into
+    # clusterView, since the logic for picking the most populous (or
+    # otherwise interesting) clusters is already here.
+
+    if not os.path.exists (opt.fasta):
+        os.makedirs (opt.fasta)
+    elif not os.path.isdir (opt.fasta):
+        raise RuntimeError ('%s exists but is not a directory' % opt.fasta)
+
+    match = re.search (REGEX_NAME, cluster.name)
+    if match is None:
+        raise RuntimeError ('cannot find cluster ID in %s' % cluster.name)
+
+    if cluster.strand == '+':     # Cluster object includes bases in forward strand sense
+        bases = cluster.bases
+    else:
+        bases = cluster.bases[::-1].translate(COMPLTAB)     # fasta file wants them in read sense
+
+    filename = '%s/%s.fasta' % (opt.fasta, match.group(1))
+    handle = open (filename, 'w')
+    handle.write ('>%s\n' % cluster.name)
+
+    for ix in xrange(0, len(bases), FASTA_WRAP):
+        handle.write (bases[ix:ix+FASTA_WRAP] + '\n')
+
+    handle.close()
 
 def groupTran(tranList, exonList, cluster_num):
     # minVal is the minimum starting point of all the transcripts, maxVal stands for maximum
@@ -470,21 +480,26 @@ def calcDis(df, i, j):
     return distance
 
 def assignColor(row):
-    if row[groupName] == 0:
-        return 'blue'
-    elif row[groupName] == 1:
-        return 'green'
-    elif row[groupName] == 2:
-        return 'red'
-    elif row[groupName] == 3:
-        return 'orange'
-    elif row[groupName] == 4:
-        return 'yellow'
+    for x in range(5):
+        if row[groupName] == x:
+            return COLORS[x]
+            break
+
+def changeNames(tranNames):
+    newTranNames = list()
+    for name in tranNames:
+        if len(name) >= 30:
+            splitList = name.split('|')
+            newName = "|".join([splitList[0], splitList[2]])
+            newTranNames.append(newName)
+        else:
+            newTranNames.append(name)
+    return newTranNames
 
 class Transcript (object):
     '''Just a struct actually, containing data about a transcript.'''
 
-    def __init__ (self, name, start=None, end=None, score=None, full=None, partial=None, annot=False):
+    def __init__ (self, name, start=None, end=None, score=None, full=None, partial=None, annot=False, ID=None, chr=None):
 
         self.name    = name
         self.score   = score
@@ -494,10 +509,11 @@ class Transcript (object):
         self.partial = partial
         self.start = start
         self.end = end
+        self.ID = ID
         self.exons   = list()           # Exon objects for this transcript
         self.blocks  = set()            # blocks where this transcript has exon(s)
         self.regions = set()            # regions where this transcript has exon(s)
-
+        self.chr = chr
         # What's the difference between a block and a region? Every
         # exon boundary defines a new region. A new block occurs only
         # when exon coverage transitions from 0 to >0. The example
