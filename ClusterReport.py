@@ -11,7 +11,7 @@ VERSION = '20141029.01'
 logger.debug('version %s loaded' % VERSION)
 
 class ClusterList (object):
-    
+
     def __init__ (self, filename):
         '''
         '''
@@ -48,7 +48,7 @@ class ClusterList (object):
                 self.numCells += 1
                 self.cells[cell] = self.numCells            # if not, give it a number
             cellNo = self.cells[cell]
-            
+
             clusterEnt = self.clusters.setdefault(clusterID, {}).setdefault(FL, {}).setdefault(cellNo, [])
             clusterEnt.append (shortName)
 
@@ -58,13 +58,15 @@ class ClusterList (object):
 
     def showReads (self, clusterID):
         '''Generator function returns all reads for a specified cluster.'''
-
-        clusterEnt = self.clusters[clusterID]
-
-        for FL in sorted(clusterEnt.keys()):
-            for cellNo in sorted(clusterEnt[FL].keys()):
-                yield (FL, cellNo, clusterEnt[FL][cellNo])      # last item is a list of reads
-
+        try:
+            clusterEnt = self.clusters[clusterID]
+            for FL in sorted(clusterEnt.keys()):
+                for cellNo in sorted(clusterEnt[FL].keys()):
+                    yield (FL, cellNo, clusterEnt[FL][cellNo])      # last item is a list of reads
+        except KeyError:
+            errorfile = open('clustererror.txt', 'w')
+            errorfile.write(clusterID)
+            errorfile.close()
         return
 
     def showCells (self):

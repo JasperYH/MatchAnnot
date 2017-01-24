@@ -157,8 +157,13 @@ def main ():
 
         # Bump cursor past any genes which end prior to the start of
         # the current read. We're done looking at them.
-
-        annotCursor.advance (chr, start)
+        try:
+            annotCursor.advance (chr, start)
+        except RuntimeError:
+            errfile = open('chromerror.txt', 'w')
+            errfile.write(line)
+            errfile.close()
+            continue
 
         bestHit = best.Best()
 
@@ -398,7 +403,7 @@ def internalMatch (list1, list2):
     the 3' end, at least) by polyadenylation at more sites than the
     annotations record.
     '''
-    
+
     for ix in xrange(1,len(list1)):                    # check starts, skip exon 0
         if list1[ix].start != list2[ix].start:
             return False
@@ -432,7 +437,7 @@ def showCoords (readExons, tranExons):
                 printReadExon (ixR, readExons[ixR])
                 ixR += 1
 
-            else:  
+            else:
 
                 printTranExon (ixT, tranExons[ixT])
                 printStartStop (tranExons, tranExons[ixT])
